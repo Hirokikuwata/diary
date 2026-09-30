@@ -13,6 +13,12 @@
 
   var dateFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, month: "numeric", day: "numeric", weekday: "short" });
   var keyFormat = new Intl.DateTimeFormat("en-CA", { timeZone: timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  var photoBase = config.supabaseUrl.replace(/\/$/, "") + "/storage/v1/object/public/diary-photos/";
+
+  function photoUrl(path) {
+    return photoBase + path.split("/").map(encodeURIComponent).join("/");
+  }
+
   var timeFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
   function render() {
@@ -47,10 +53,34 @@
       var time = document.createElement("time");
       time.dateTime = entry.written_at;
       time.textContent = timeFormat.format(instant);
-      var body = document.createElement("div");
-      body.className = "body";
-      body.textContent = entry.body; // never innerHTML: entries are plain text
-      item.append(time, body);
+      var content = document.createElement("div");
+      content.className = "content";
+      if (entry.body) {
+        var body = document.createElement("div");
+        body.className = "body";
+        body.textContent = entry.body; // never innerHTML: entries are plain text
+        content.append(body);
+      }
+      var paths = entry.photo_paths || [];
+      if (paths.length > 0) {
+        var gallery = document.createElement("div");
+        gallery.className = "photos";
+        paths.forEach(function (path, index) {
+          var link = document.createElement("a");
+          link.href = photoUrl(path);
+          link.target = "_blank";
+          link.rel = "noopener";
+          var image = document.createElement("img");
+          image.src = link.href;
+          image.alt = "写真 " + (index + 1);
+          image.loading = "lazy";
+          image.decoding = "async";
+          link.append(image);
+          gallery.append(link);
+        });
+        content.append(gallery);
+      }
+      item.append(time, content);
       list.append(item);
     });
   }
@@ -58,7 +88,7 @@
   function load() {
     return client
       .from("diary_entries")
-      .select("id, body, written_at")
+      .select("id, body, written_at, photo_paths")
       .order("written_at", { ascending: false })
       .limit(500)
       .then(function (result) {
@@ -75,7 +105,7 @@
     .channel("diary")
     .on("postgres_changes", { event: "INSERT", schema: "public", table: "diary_entries" }, function (payload) {
       var row = payload.new;
-      entries.set(row.id, { id: row.id, body: row.body, written_at: row.written_at });
+      entries.set(row.id, { id: row.id, body: row.body, written_at: row.written_at, photo_paths: row.photo_paths || [] });
       fresh.add(row.id);
       render();
     })
