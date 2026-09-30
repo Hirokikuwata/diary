@@ -1,4 +1,5 @@
-// Public diary viewer: loads entries from Supabase and shows new ones live (Supabase Realtime).
+// Public diary viewer: shows the entries the owner chose to publish, updated live.
+// Private entries and their photos are never readable here (enforced by the database).
 (function () {
   "use strict";
   var config = window.DIARY_CONFIG;
@@ -13,11 +14,8 @@
 
   var dateFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, month: "numeric", day: "numeric", weekday: "short" });
   var keyFormat = new Intl.DateTimeFormat("en-CA", { timeZone: timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
-  var photoBase = config.supabaseUrl.replace(/\/$/, "") + "/storage/v1/object/public/diary-photos/";
-
-  function photoUrl(path) {
-    return photoBase + path.split("/").map(encodeURIComponent).join("/");
-  }
+  // Photo paths -> signed URLs (the photo bucket is private; public entries' photos may be signed).
+  var photoUrls = new Map();
 
   var timeFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
@@ -66,8 +64,10 @@
         var gallery = document.createElement("div");
         gallery.className = "photos";
         paths.forEach(function (path, index) {
+          var url = photoUrls.get(path);
+          if (!url) return;
           var link = document.createElement("a");
-          link.href = photoUrl(path);
+          link.href = url;
           link.target = "_blank";
           link.rel = "noopener";
           var image = document.createElement("img");
@@ -89,35 +89,52 @@
     return client
       .from("diary_entries")
       .select("id, body, written_at, photo_paths")
+      .eq("is_public", true)
       .order("written_at", { ascending: false })
       .limit(500)
       .then(function (result) {
         if (result.error) throw result.error;
-        entries.clear();
-        result.data.forEach(function (entry) {
-          entries.set(entry.id, entry);
+        var rows = result.data;
+        var paths = [];
+        rows.forEach(function (entry) {
+          (entry.photo_paths || []).forEach(function (path) { paths.push(path); });
         });
-        render();
+        var signing = paths.length === 0
+          ? Promise.resolve({ data: [] })
+          : client.storage.from("diary-photos").createSignedUrls(paths, 3600);
+        return signing.then(function (signed) {
+          photoUrls.clear();
+          (signed.data || []).forEach(function (item) {
+            if (item.signedUrl) photoUrls.set(item.path, item.signedUrl);
+          });
+          var known = new Set(entries.keys());
+          entries.clear();
+          rows.forEach(function (entry) {
+            entries.set(entry.id, entry);
+            if (known.size > 0 && !known.has(entry.id)) fresh.add(entry.id);
+          });
+          render();
+        });
       });
   }
 
+  var timer = null;
+  function reloadSoon() {
+    clearTimeout(timer);
+    timer = setTimeout(function () { load().catch(showError); }, 200);
+  }
+
+  // The app announces publishing, unpublishing and deleting on this topic (no content is sent);
+  // a row that becomes private is not delivered as a database change, so this is what removes it.
   client
-    .channel("diary")
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "diary_entries" }, function (payload) {
-      var row = payload.new;
-      entries.set(row.id, { id: row.id, body: row.body, written_at: row.written_at, photo_paths: row.photo_paths || [] });
-      fresh.add(row.id);
-      render();
-    })
-    .on("postgres_changes", { event: "DELETE", schema: "public", table: "diary_entries" }, function (payload) {
-      entries.delete(payload.old.id);
-      render();
-    })
+    .channel("diary-public")
+    .on("broadcast", { event: "changed" }, reloadSoon)
+    .on("postgres_changes", { event: "*", schema: "public", table: "diary_entries" }, reloadSoon)
     .subscribe(function (state) {
       if (state === "SUBSCRIBED") {
         status.textContent = "● リアルタイム更新中";
         // Catch anything written while connecting.
-        load().catch(showError);
+        reloadSoon();
       } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT" || state === "CLOSED") {
         status.textContent = "更新が止まっています。再読み込みしてください。";
       }
@@ -128,4 +145,9 @@
   }
 
   load().catch(showError);
+  // Signed photo URLs last an hour; refresh well before, and whenever the tab comes back.
+  setInterval(reloadSoon, 20 * 60 * 1000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") reloadSoon();
+  });
 })();
