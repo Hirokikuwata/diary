@@ -8,6 +8,8 @@
     auth: { persistSession: false, autoRefreshToken: false },
   });
   var entries = new Map();
+  // Entry id -> ids of the public entries it is linked to (links to private entries are not readable).
+  var related = new Map();
   var fresh = new Set();
   var main = document.getElementById("entries");
   var status = document.getElementById("status");
@@ -18,6 +20,12 @@
   var photoUrls = new Map();
 
   var timeFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+  function snippet(entry) {
+    var text = (entry.body || "").replace(/\s+/g, " ").trim();
+    if (!text) return "写真";
+    return text.length > 24 ? text.slice(0, 24) + "…" : text;
+  }
 
   function render() {
     var sorted = Array.from(entries.values()).sort(function (a, b) {
@@ -47,6 +55,7 @@
       }
       var item = document.createElement("li");
       item.dataset.id = entry.id;
+      item.id = "e-" + entry.id;
       if (fresh.has(entry.id)) item.className = "new";
       var time = document.createElement("time");
       time.dateTime = entry.written_at;
@@ -80,12 +89,52 @@
         });
         content.append(gallery);
       }
+      var others = (related.get(entry.id) || [])
+        .map(function (id) { return entries.get(id); })
+        .filter(Boolean)
+        .sort(function (a, b) { return a.written_at < b.written_at ? -1 : 1; });
+      if (others.length > 0) {
+        var links = document.createElement("ul");
+        links.className = "related";
+        links.setAttribute("aria-label", "つながった日記");
+        others.forEach(function (other) {
+          var li = document.createElement("li");
+          var anchor = document.createElement("a");
+          anchor.href = "#e-" + other.id;
+          anchor.textContent = "🔗 " + dateFormat.format(new Date(other.written_at)) + " " + snippet(other);
+          li.append(anchor);
+          links.append(li);
+        });
+        content.append(links);
+      }
       item.append(time, content);
       list.append(item);
     });
   }
 
+  function loadLinks() {
+    return client
+      .from("diary_links")
+      .select("entry_id, linked_id")
+      .then(function (result) {
+        if (result.error) throw result.error;
+        related.clear();
+        result.data.forEach(function (link) {
+          [[link.entry_id, link.linked_id], [link.linked_id, link.entry_id]].forEach(function (pair) {
+            related.set(pair[0], (related.get(pair[0]) || []).concat(pair[1]));
+          });
+        });
+      });
+  }
+
   function load() {
+    return Promise.all([loadLinks(), loadEntries()]).then(function (results) {
+      render();
+      return results;
+    });
+  }
+
+  function loadEntries() {
     return client
       .from("diary_entries")
       .select("id, body, written_at, photo_paths")
@@ -113,7 +162,6 @@
             entries.set(entry.id, entry);
             if (known.size > 0 && !known.has(entry.id)) fresh.add(entry.id);
           });
-          render();
         });
       });
   }
@@ -130,6 +178,7 @@
     .channel("diary-public")
     .on("broadcast", { event: "changed" }, reloadSoon)
     .on("postgres_changes", { event: "*", schema: "public", table: "diary_entries" }, reloadSoon)
+    .on("postgres_changes", { event: "*", schema: "public", table: "diary_links" }, reloadSoon)
     .subscribe(function (state) {
       if (state === "SUBSCRIBED") {
         status.textContent = "● リアルタイム更新中";
