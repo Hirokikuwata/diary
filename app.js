@@ -154,8 +154,10 @@
         .filter(Boolean)
         .sort(function (a, b) { return a.written_at < b.written_at ? -1 : 1; });
       if (others.length > 0) {
+        var box = collapsible("rel-" + entry.id, "related");
+        box.label.textContent = "🔗 つながった日記";
+        box.count.textContent = others.length + "件";
         var links = document.createElement("ul");
-        links.className = "related";
         links.setAttribute("aria-label", "つながった日記");
         others.forEach(function (other) {
           var li = document.createElement("li");
@@ -165,7 +167,8 @@
           li.append(anchor);
           links.append(li);
         });
-        content.append(links);
+        box.details.append(links);
+        content.append(box.details);
       }
       item.append(time, content);
       list.append(item);
