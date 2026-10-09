@@ -11,6 +11,9 @@
   // Entry id -> ids of the public entries it is linked to (links to private entries are not readable).
   var related = new Map();
   var fresh = new Set();
+  // Months ("2026-10") and days ("2026-10-08") the visitor expanded; everything starts collapsed.
+  var openKeys = new Set();
+  var revealed = new Set();
   var main = document.getElementById("entries");
   var status = document.getElementById("status");
 
@@ -27,10 +30,36 @@
     return text.length > 24 ? text.slice(0, 24) + "…" : text;
   }
 
+  var monthFormat = new Intl.DateTimeFormat("ja-JP", { timeZone: timeZone, year: "numeric", month: "long" });
+  function monthLabel(instant) {
+    return monthFormat.format(instant);
+  }
+
+  // A <details> that remembers whether the visitor opened it, across live re-renders.
+  function collapsible(key, kind) {
+    var details = document.createElement("details");
+    details.className = kind;
+    details.dataset.key = key;
+    details.open = openKeys.has(key);
+    details.addEventListener("toggle", function () {
+      if (details.open) openKeys.add(key);
+      else openKeys.delete(key);
+    });
+    var summary = document.createElement("summary");
+    var label = document.createElement("span");
+    var count = document.createElement("span");
+    count.className = "count";
+    summary.append(label, count);
+    details.append(summary);
+    return { details: details, label: label, count: count };
+  }
+
   function render() {
     var sorted = Array.from(entries.values()).sort(function (a, b) {
       return a.written_at < b.written_at ? 1 : -1;
     });
+    var monthTotals = {};
+    var dayTotals = {};
     main.replaceChildren();
     if (sorted.length === 0) {
       var empty = document.createElement("p");
@@ -40,23 +69,54 @@
       return;
     }
     var currentKey = null;
+    var currentMonth = null;
+    var monthList = null;
+    var monthCount = null;
+    var dayCount = null;
     var list = null;
     sorted.forEach(function (entry) {
       var instant = new Date(entry.written_at);
       var key = keyFormat.format(instant);
+      var monthKey = key.slice(0, 7);
+      if (monthKey !== currentMonth) {
+        currentMonth = monthKey;
+        currentKey = null;
+        var monthBox = collapsible(monthKey, "month");
+        monthCount = monthBox.count;
+        monthList = document.createElement("div");
+        monthList.className = "days";
+        monthBox.details.append(monthList);
+        main.append(monthBox.details);
+        monthBox.label.textContent = monthLabel(instant);
+      }
       if (key !== currentKey) {
         currentKey = key;
-        var section = document.createElement("section");
-        var heading = document.createElement("h2");
-        heading.textContent = dateFormat.format(instant);
+        var dayBox = collapsible(key, "day");
+        dayBox.label.textContent = dateFormat.format(instant);
+        dayCount = dayBox.count;
         list = document.createElement("ol");
-        section.append(heading, list);
-        main.append(section);
+        dayBox.details.append(list);
+        monthList.append(dayBox.details);
+        dayTotals[key] = 0;
       }
+      monthTotals[monthKey] = (monthTotals[monthKey] || 0) + 1;
+      dayTotals[key] += 1;
+      monthCount.textContent = monthTotals[monthKey] + "件";
+      dayCount.textContent = dayTotals[key] + "件";
       var item = document.createElement("li");
       item.dataset.id = entry.id;
       item.id = "e-" + entry.id;
-      if (fresh.has(entry.id)) item.className = "new";
+      if (fresh.has(entry.id)) {
+        item.className = "new";
+        // New entries open their day once, so they are noticed.
+        if (!revealed.has(entry.id)) {
+          revealed.add(entry.id);
+          openKeys.add(key);
+          openKeys.add(monthKey);
+          list.parentElement.open = true;
+          monthList.parentElement.open = true;
+        }
+      }
       var time = document.createElement("time");
       time.dateTime = entry.written_at;
       time.textContent = timeFormat.format(instant);
@@ -189,11 +249,22 @@
       }
     });
 
+  // Following a link to an entry inside a collapsed month/day opens it first.
+  function revealHash() {
+    var target = location.hash.length > 1 ? document.getElementById(location.hash.slice(1)) : null;
+    if (!target) return;
+    for (var node = target.parentElement; node; node = node.parentElement) {
+      if (node.tagName === "DETAILS") node.open = true;
+    }
+    target.scrollIntoView({ block: "center" });
+  }
+  window.addEventListener("hashchange", revealHash);
+
   function showError() {
     status.textContent = "日記を読み込めませんでした。時間をおいて再読み込みしてください。";
   }
 
-  load().catch(showError);
+  load().then(revealHash).catch(showError);
   // Signed photo URLs last an hour; refresh well before, and whenever the tab comes back.
   setInterval(reloadSoon, 20 * 60 * 1000);
   document.addEventListener("visibilitychange", function () {

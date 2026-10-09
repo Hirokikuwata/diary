@@ -47,3 +47,9 @@ li.new { animation: flash 2s ease-out; }
 .related a { display: inline-block; padding: 0.1rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); text-decoration: none; }
 .related a:hover, .related a:focus-visible { text-decoration: underline; }
 li:target { background: var(--new); }
+details.month { margin-bottom: 0.5rem; }
+details.month > summary { font-size: 1.05rem; font-weight: 700; border-bottom: 2px solid var(--accent); }
+details.day { margin: 0.25rem 0 0.5rem 0.5rem; }
+details.day > summary { font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+summary { display: flex; align-items: baseline; gap: 0.6rem; min-height: 2.5rem; padding: 0.25rem 0; cursor: pointer; }
+summary .count { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
